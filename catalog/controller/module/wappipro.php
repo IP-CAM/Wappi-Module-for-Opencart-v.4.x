@@ -9,6 +9,7 @@ class WappiPro extends Controller
     public function status_change($route, $data) {
         $orderStatusId = $data[1];
         $orderId       = $data[0];
+        $sellerComment = isset($data[2]) ? $data[2] : '';
 
         $this->load->model('setting/setting');
         $this->load->model('checkout/order');
@@ -29,7 +30,7 @@ class WappiPro extends Controller
                     '{order_date}' => $order['date_added'],
                     '{order_total}' => round($order['total'] * $order['currency_value'], 2) . ' ' . $order['currency_code'],
                     '{order_comment}' => $order['comment'],
-                    '{seller_comment}' => $this->getSellerComment($orderId, $orderStatusId),
+                    '{seller_comment}' => $sellerComment,
                     '{billing_first_name}' => $order['payment_firstname'] ?? '',
                     '{billing_last_name}' => $order['payment_lastname'] ?? '',
                     '{lastname}' => $order['lastname'],
