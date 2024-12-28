@@ -130,7 +130,6 @@ class WappiPro extends \Opencart\System\Engine\Controller {
                                 $this->_save_user($settings);
                                 $this->testResult = $this->sendTestSMS($settings, $platform, $phone, $message);
                             } else {
-                                $this->model_setting_setting->editSetting("wappipro_platform", array('wappipro_platform' => ''));
                                 $this->testResult = false;
                                 $this->error[] = ["error" => $this->language->get('err_request')];
                             }
@@ -248,7 +247,7 @@ class WappiPro extends \Opencart\System\Engine\Controller {
         if (!empty($apiKey)) {
             $req = array();
 
-            if ($platform != '') {
+            if (strlen($username) != 20) {
                 $req['postfields'] = json_encode(array(
                     'recipient' => $to,
                     'body' => $body,
