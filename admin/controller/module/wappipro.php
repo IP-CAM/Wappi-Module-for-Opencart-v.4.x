@@ -122,17 +122,20 @@ class WappiPro extends \Opencart\System\Engine\Controller {
                         $this->testResult = false;
                         $data["payment_time_string"] = $this->language->get('unvalid_profile');
                     } else {
-                        $platform = $data_profile['platform'];
-                        if ($platform !== false) {
-                            $this->model_setting_setting->editSetting("wappipro_platform", array('wappipro_platform' => $platform));
-                            $this->_save_user($settings);
+                        if (isset($data_profile['platform'])) {
+                            $platform = $data_profile['platform'];
                             $data["payment_time_string"] = $data_profile["payment_time_string"];
-
-
-                            $this->testResult = $this->sendTestSMS($settings, $platform, $phone, $message);
+                            if ($platform !== false) {
+                                $this->model_setting_setting->editSetting("wappipro_platform", array('wappipro_platform' => $platform));
+                                $this->_save_user($settings);
+                                $this->testResult = $this->sendTestSMS($settings, $platform, $phone, $message);
+                            } else {
+                                $this->model_setting_setting->editSetting("wappipro_platform", array('wappipro_platform' => ''));
+                                $this->testResult = false;
+                                $this->error[] = ["error" => $this->language->get('err_request')];
+                            }
                         } else {
-                            $this->testResult = false;
-                            $this->error[] = ["error" => $this->language->get('err_request')];
+                            $this->testResult = $this->sendTestSMS($settings, '', $phone, $message);
                         }
                     }
                 }
@@ -244,18 +247,35 @@ class WappiPro extends \Opencart\System\Engine\Controller {
 
         if (!empty($apiKey)) {
             $req = array();
-            $req['postfields'] = json_encode(array(
-                'recipient' => $to,
-                'body' => $body,
-            ));
 
-            $req['header'] = array(
-                "accept: application/json",
-                "Authorization: " .  $apiKey,
-                "Content-Type: application/json",
-            );
-            $req['url'] = 'https://wappi.pro/'. $platform . 'api/sync/message/send?profile_id=' . $username;
+            if ($platform != '') {
+                $req['postfields'] = json_encode(array(
+                    'recipient' => $to,
+                    'body' => $body,
+                ));
 
+                $req['header'] = array(
+                    "accept: application/json",
+                    "Authorization: " .  $apiKey,
+                    "Content-Type: application/json",
+                );
+
+                $req['url'] = 'https://wappi.pro/'. $platform . 'api/sync/message/send?profile_id=' . $username;
+            } else {
+                $req['postfields'] = json_encode(array(
+                    'recipient' => $to,
+                    'body' => $body,
+                    'cascade_id' => $username
+                ));
+
+                $req['header'] = array(
+                    "accept: application/json",
+                    "Authorization: " .  $apiKey,
+                    "Content-Type: application/json",
+                );
+
+                $req['url'] = 'https://wappi.pro/csender/cascade/send';
+            }
             try {
                 $answer = json_decode($this->curlito(false, $req), true);
                 return $answer === 200;
@@ -308,8 +328,15 @@ class WappiPro extends \Opencart\System\Engine\Controller {
             error_log('Missing API key or username' . PHP_EOL, 3, DIR_LOGS . "wappi-errors.log");
             return ['error' => 'Missing API key or username'];
         }
-    
-        $url = 'https://wappi.pro/api/sync/get/status?profile_id=' . urlencode($username);
+
+        $username_len = strlen($username);
+        
+        if ($username_len != 20) {
+            $url = 'https://wappi.pro/api/sync/get/status?profile_id=';
+        } else {
+            $url = 'https://wappi.pro/csender/cascade/get?cascade_id=';
+        }
+        $url .= urlencode($username);
         $headers = array(
             "accept: application/json",
             "Authorization: " . $apiKey,
@@ -346,21 +373,26 @@ class WappiPro extends \Opencart\System\Engine\Controller {
             error_log('Ошибка JSON: ' . json_last_error_msg() . PHP_EOL, 3, DIR_LOGS . "wappi-errors.log");
             return ['error' => 'JSON Error: ' . json_last_error_msg()];
         }
-    
-        if (isset($data['status'])) {
-            error_log('Ошибка отправки GET-запроса: ' . $data['status'] . PHP_EOL, 3, DIR_LOGS . "wappi-errors.log");
-            return ['error' => 'Ошибка отправки GET-запроса: ' . $data['status']];
-        }
-    
-        $platform = $data['platform'];
-        if (array_key_exists('platform', $data) && $data['platform']) {
-            $platform = ($data['platform'] === 'tg') ? 't' : '';
+
+        if ($username_len != 20) {
+            if (isset($data['status'])) {
+                error_log('Ошибка отправки GET-запроса: ' . $data['status'] . PHP_EOL, 3, DIR_LOGS . "wappi-errors.log");
+                return ['error' => 'Ошибка отправки GET-запроса: ' . $data['status']];
+            }
+        
+            $platform = $data['platform'];
+            if (array_key_exists('platform', $data) && $data['platform']) {
+                $platform = ($data['platform'] === 'tg') ? 't' : '';
+            } else {
+                $platform = false;
+            }
+
+            $data["platform"] = $platform;
+            $data['payment_time_string'] = $this->_parse_time($data);
         } else {
-            $platform = false;
+            $data['payment_time_string'] = $this->_output_cascade($data);
         }
 
-        $data["platform"] = $platform;
-        $data['payment_time_string'] = $this->_parse_time($data);
 
         return $data;
     }
@@ -402,6 +434,34 @@ class WappiPro extends \Opencart\System\Engine\Controller {
             $result_string .= $this->language->get("wappi_subscription_period_expired");
         }
         return $result_string;        
+    }
+    
+    private function _output_cascade($data) {
+		if (isset($data['cascade']) && isset($data['cascade']['order'])) {
+			$cascade = $data['cascade'];
+			$cascade_name = $cascade['name'] ?? '';
+			$order = $cascade['order'];
+		
+			$platforms = array_map(function ($item) {
+				$platform = $item['platform'] ?? '';
+				$profile_uuid = $item['profile_uuid'] ?? '';
+		
+				$platform_display = match ($platform) {
+					'wz' => 'WhatsApp',
+					'tg' => 'Telegram',
+					'sms' => $this->language->get('sms'),
+					default => $platform,
+				};
+		
+				return "{$platform_display} {$profile_uuid}";
+			}, $order);
+		
+			$platforms_list = implode(', ', $platforms);
+		
+			return $this->language->get('cascade') . " \"{$cascade_name}\": {$platforms_list}";
+		} else {
+			return $this->language->get('cascade_no_data');
+		}
     }
     
     public function _save_user(array $settings): void {
